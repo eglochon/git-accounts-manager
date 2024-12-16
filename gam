@@ -146,6 +146,10 @@ update_property() {
     PROPERTY=$2
     VALUE=$3
 
+    if [[ "$PROPERTY" == *"."* ]]; then
+        PROPERTY="\"${PROPERTY}\""
+    fi
+
     if [ -z "$ACCOUNT" ] || [ -z "$PROPERTY" ] || [ -z "$VALUE" ]; then
         echo "Error: Please specify <account>, <property>, and <value>."
         exit 1
@@ -287,20 +291,20 @@ apply_account() {
     GPG_FORMAT=$(echo "$ACCOUNT_DATA" | jq -r '."gpg.format"')
     CONFIGS=$(echo "$ACCOUNT_DATA" | jq -r '.config')
 
-    echo git config user.name "$NAME"
-    echo git config user.email "$EMAIL"
+    git config user.name "$NAME"
+    git config user.email "$EMAIL"
 
     if [ "$SIGNINGKEY" != "null" ] && [ "$GPG_FORMAT" != "null" ]; then
-        echo git config user.signingkey "$SIGNINGKEY"
-        echo git config gpg.format "$GPG_FORMAT"
-        echo git config commit.gpgsign true
+        git config user.signingkey "$SIGNINGKEY"
+        git config gpg.format "$GPG_FORMAT"
+        git config commit.gpgsign true
     fi
 
     if [ "$CONFIGS" != "null" ]; then
         echo "$CONFIGS" | jq -c 'to_entries[]' | while read -r pair; do
             key=$(echo "$pair" | jq -r '.key')
             value=$(echo "$pair" | jq -r '.value')
-            echo git config "$key" "$value"
+            git config "$key" "$value"
         done
     fi
 
@@ -346,7 +350,7 @@ add_remote() {
     CRED_URL=$(echo "$URL" | sed "s#://#://${USERNAME}:${PASSWORD}@#")
 
     # Add to git remote
-    echo git remote set-url origin "$CRED_URL"
+    git remote set-url origin "$CRED_URL"
     echo "Remote origin updated with credentials for account: $ACCOUNT."
 }
 
