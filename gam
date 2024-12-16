@@ -147,7 +147,7 @@ update_property() {
     VALUE=$3
 
     if [ -z "$ACCOUNT" ] || [ -z "$PROPERTY" ] || [ -z "$VALUE" ]; then
-        echo "Error: Please specify <account_id>, <property>, and <value>."
+        echo "Error: Please specify <account>, <property>, and <value>."
         exit 1
     fi
 
@@ -183,6 +183,32 @@ set_signingkey() {
     update_property "$1" "signingkey" "$2"
 }
 
+# Delete the signing key for an account
+delete_signingkey() {
+    ACCOUNT=$1
+
+    if [ -z "$ACCOUNT" ]; then
+        echo "Error: Please specify <account>."
+        exit 1
+    fi
+
+    # Check if the account exists
+    ACCOUNT_DATA=$(echo "$CONFIG_DATA" | jq -M ".${ACCOUNT}")
+    if [ "$ACCOUNT_DATA" = "null" ]; then
+        echo "The account \"$ACCOUNT\" doesn't exist!"
+        exit 1
+    fi
+
+    # Remove the signing key
+    UPDATED_DATA=$(jq "del(.${ACCOUNT}.signingkey)" <<< "$CONFIG_DATA")
+    if [ "$(echo "$UPDATED_DATA" | jq -M ".${ACCOUNT}.signingkey")" = "null" ]; then
+        echo "Signing key for account \"$ACCOUNT\" successfully deleted."
+    fi
+
+    # Save the updated JSON
+    echo "$UPDATED_DATA" > "$CONFIG_FILEPATH"
+}
+
 set_gpg_format() {
     update_property "$1" "gpg.format" "$2"
 }
@@ -193,7 +219,7 @@ set_config() {
     CONFIG_VALUE=$3
 
     if [ -z "$ACCOUNT" ] || [ -z "$CONFIG_KEY" ] || [ -z "$CONFIG_VALUE" ]; then
-        echo "Error: Please specify <account_id>, <config_key>, and <config_value>."
+        echo "Error: Please specify <account>, <config_key>, and <config_value>."
         exit 1
     fi
 
@@ -210,6 +236,35 @@ set_config() {
     UPDATED_DATA=$(jq ".${ACCOUNT}.config.${CONFIG_KEY} = \"$CONFIG_VALUE\"" <<< "$CONFIG_DATA")
     echo "$UPDATED_DATA" > "$CONFIG_FILEPATH"
     echo "Updated custom config $CONFIG_KEY for account $ACCOUNT."
+}
+
+# Delete a specific configuration for an account
+delete_config() {
+    ACCOUNT=$1
+    CONFIG_KEY=$2
+
+    if [ -z "$ACCOUNT" ] || [ -z "$CONFIG_KEY" ]; then
+        echo "Error: Please specify <account> and <config_key>."
+        exit 1
+    fi
+
+    # Check if the account exists
+    ACCOUNT_DATA=$(echo "$CONFIG_DATA" | jq -M ".${ACCOUNT}")
+    if [ "$ACCOUNT_DATA" = "null" ]; then
+        echo "The account \"$ACCOUNT\" doesn't exist!"
+        exit 1
+    fi
+
+    if [[ "$CONFIG_KEY" == *"."* ]]; then
+        CONFIG_KEY="\"${CONFIG_KEY}\""
+    fi
+
+    # Remove the configuration key
+    UPDATED_DATA=$(jq "del(.${ACCOUNT}.config.${CONFIG_KEY})" <<< "$CONFIG_DATA")
+
+    # Save the updated JSON
+    echo "$UPDATED_DATA" > "$CONFIG_FILEPATH"
+    echo "Deleted config \"$CONFIG_KEY\" for account \"$ACCOUNT\"."
 }
 
 # Apply account configs to Git
@@ -254,13 +309,13 @@ apply_account() {
 
 # List all registered accounts
 list_accounts() {
-    ACCOUNT_IDS=$(echo "$CONFIG_DATA" | jq -r 'keys[]')
-    if [ -z "$ACCOUNT_IDS" ]; then
+    ACCOUNTS=$(echo "$CONFIG_DATA" | jq -r 'keys[]')
+    if [ -z "$ACCOUNTS" ]; then
         echo "No accounts are registered."
         exit 0
     fi
 
-    echo "$ACCOUNT_IDS"
+    echo "$ACCOUNTS"
 }
 
 # Add a remote URL with account credentials
@@ -269,7 +324,7 @@ add_remote() {
     URL=$2
 
     if [ -z "$ACCOUNT" ] || [ -z "$URL" ]; then
-        echo "Error: Please specify <account_id> and <URL>."
+        echo "Error: Please specify <account> and <URL>."
         exit 1
     fi
 
@@ -326,6 +381,9 @@ case "$1" in
         ;;
     set-config)
         set_config "$2" "$3" "$4"
+        ;;
+    delete-config)
+        delete_config "$2" "$3"
         ;;
     list)
         list_accounts
