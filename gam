@@ -1,0 +1,347 @@
+#!/usr/bin/env bash
+
+CONFIG_FILE="credentials.json"
+CONFIG_DIRS="${HOME}/.gam"
+if [ ! -z "${XDG_CONFIG_HOME}" ]; then
+    CONFIG_DIRS="${XDG_CONFIG_HOME}/git-accounts-manager:${CONFIG_DIRS}"
+fi
+CONFIG_DIRS=$(echo "${CONFIG_DIRS}" | tr ":" "\n")
+
+CONFIG_FILEPATH=""
+for addr in $CONFIG_DIRS; do
+    if [ -f "$addr/$CONFIG_FILE" ]; then
+        CONFIG_FILEPATH="$addr/$CONFIG_FILE"
+        break
+    fi
+done
+
+if [ -z "$CONFIG_FILEPATH" ]; then
+    echo "The $CONFIG_FILE file was not found!"
+    exit 1
+elif [ "$1" = "init" ]; then
+    mkdir -p "$(dirname "$CONFIG_FILEPATH")" && touch "$CONFIG_FILEPATH"
+    echo -n "{}" > "$CONFIG_FILEPATH"
+fi
+
+# Load configuration data
+CONFIG_DATA=$(cat "$CONFIG_FILEPATH")
+
+# Display detailed help message
+show_help() {
+    echo "Usage: gam <command> [arguments]"
+    echo ""
+    echo "Commands:"
+    echo "  init                                 Creates the credentials.json file in the config path."
+    echo "  register <account>                   Register a new account with the specified ID."
+    echo "                                       Prompts for name, email, username, password, and other settings."
+    echo ""
+    echo "  get <account>                        Display the details of a registered account."
+    echo ""
+    echo "  list                                 List all registered account IDs."
+    echo ""
+    echo "  set-name <account> <name>            Update the name of the specified account."
+    echo ""
+    echo "  set-email <account> <email>          Update the email address of the specified account."
+    echo ""
+    echo "  set-username <account> <username>    Update the username of the specified account."
+    echo ""
+    echo "  set-password <account> <password>    Update the password or key of the specified account."
+    echo ""
+    echo "  set-signingkey <account> <key>       Update the signing key for the specified account."
+    echo ""
+    echo "  set-gpg-format <account> <format>    Update the GPG format (e.g., 'ssh', 'gpg') for the specified account."
+    echo ""
+    echo "  set-config <account> <key> <value>   Add or update a custom configuration key-value pair for the account."
+    echo "                                       Example: set-config my_account push.autoSetupRemote true"
+    echo ""
+    echo "  apply <account>                      Apply the Git configuration (e.g., name, email, signingkey) of the specified account"
+    echo "                                       to the current Git repository."
+    echo ""
+    echo "  add-remote <account> <URL>           Add a Git remote URL with embedded credentials from the specified account."
+    echo "                                       The username and password from the account are inserted into the URL."
+    echo "                                       Updates the 'origin' remote of the current Git repository."
+    echo ""
+    echo "Examples:"
+    echo "  gam register my_account              Register a new account with the ID 'my_account'."
+    echo "  gam set-name my_account 'John Doe'   Update the name for the account 'my_account'."
+    echo "  gam get my_account                   Show details for the account 'my_account'."
+    echo "  gam apply my_account                 Apply 'my_account' configuration to the current Git repository."
+    echo "  gam add-remote my_account https://github.com/user/repo.git"
+    echo "                                       Add a remote URL for 'my_account' to the current Git repository."
+    echo ""
+    echo "Note: Ensure the credentials.json file exists and contains valid configurations."
+    exit 0
+}
+
+is_git_repository() {
+    git rev-parse --is-inside-work-tree > /dev/null 2>&1
+}
+
+# Register a new account
+register_account() {
+    ACCOUNT=$1
+    if [ -z "$ACCOUNT" ]; then
+        echo "Error: Please specify an account ID."
+        exit 1
+    fi
+
+    echo "Registering account: $ACCOUNT"
+    read -p "Name: " NAME
+    read -p "Email: " EMAIL
+    read -p "Username: " USERNAME
+    read -sp "Password/Key: " PASSWORD
+    echo
+    read -p "Signing Key (optional): " SIGNINGKEY
+    GPG_FORMAT=""
+    if [ ! -z "$SIGNINGKEY" ]; then
+        read -p "GPG Format (e.g., 'ssh' or 'gpg'): " GPG_FORMAT
+    fi
+
+    # Update the JSON
+    NEW_ACCOUNT=""
+    if [ ! -z "$SIGNINGKEY" ]; then
+        NEW_ACCOUNT=$(jq ". + {\"$ACCOUNT\": {\"name\": \"$NAME\", \"email\": \"$EMAIL\", \"username\": \"$USERNAME\", \"password\": \"$PASSWORD\", \"signingkey\": \"$SIGNINGKEY\", \"gpg.format\": \"$GPG_FORMAT\"}}" <<< "$CONFIG_DATA")
+    else
+        NEW_ACCOUNT=$(jq ". + {\"$ACCOUNT\": {\"name\": \"$NAME\", \"email\": \"$EMAIL\", \"username\": \"$USERNAME\", \"password\": \"$PASSWORD\"}}" <<< "$CONFIG_DATA")
+    fi
+
+    # Add other custom configs dynamically
+    while true; do
+        read -p "Add custom config (key=value, leave empty to stop): " CUSTOM
+        if [ -z "$CUSTOM" ]; then
+            break
+        fi
+        CONFIG_KEY="${CUSTOM%%=*}"
+        CONFIG_VALUE="${CUSTOM#*=}"
+        if [[ "$CONFIG_KEY" == *"."* ]]; then
+            CONFIG_KEY="\"${CONFIG_KEY}\""
+        fi
+        NEW_ACCOUNT=$(jq ".${ACCOUNT}.config.${CONFIG_KEY} = \"$CONFIG_VALUE\"" <<< "$NEW_ACCOUNT")
+    done
+
+    echo "$NEW_ACCOUNT" > "$CONFIG_FILEPATH"
+    echo "Account $ACCOUNT registered successfully."
+}
+
+# Get account info
+get_account() {
+    ACCOUNT=$1
+    if [ -z "$ACCOUNT" ]; then
+        echo "Error: Please specify an account ID."
+        exit 1
+    fi
+
+    ACCOUNT_DATA=$(echo "$CONFIG_DATA" | jq -M ".${ACCOUNT}")
+    if [ "$ACCOUNT_DATA" = "null" ]; then
+        echo "The account \"$ACCOUNT\" doesn't exist!"
+        exit 1
+    fi
+
+    echo "$ACCOUNT_DATA" | jq
+}
+
+# Generic function to update a property
+update_property() {
+    ACCOUNT=$1
+    PROPERTY=$2
+    VALUE=$3
+
+    if [ -z "$ACCOUNT" ] || [ -z "$PROPERTY" ] || [ -z "$VALUE" ]; then
+        echo "Error: Please specify <account_id>, <property>, and <value>."
+        exit 1
+    fi
+
+    ACCOUNT_DATA=$(echo "$CONFIG_DATA" | jq -M ".${ACCOUNT}")
+    if [ "$ACCOUNT_DATA" = "null" ]; then
+        echo "The account \"$ACCOUNT\" doesn't exist!"
+        exit 1
+    fi
+
+    UPDATED_DATA=$(jq ".${ACCOUNT}.${PROPERTY} = \"$VALUE\"" <<< "$CONFIG_DATA")
+    echo "$UPDATED_DATA" > "$CONFIG_FILEPATH"
+    echo "Updated $PROPERTY for account $ACCOUNT."
+}
+
+# Functions for specific properties
+set_name() {
+    update_property "$1" "name" "$2"
+}
+
+set_email() {
+    update_property "$1" "email" "$2"
+}
+
+set_username() {
+    update_property "$1" "username" "$2"
+}
+
+set_password() {
+    update_property "$1" "password" "$2"
+}
+
+set_signingkey() {
+    update_property "$1" "signingkey" "$2"
+}
+
+set_gpg_format() {
+    update_property "$1" "gpg.format" "$2"
+}
+
+set_config() {
+    ACCOUNT=$1
+    CONFIG_KEY=$2
+    CONFIG_VALUE=$3
+
+    if [ -z "$ACCOUNT" ] || [ -z "$CONFIG_KEY" ] || [ -z "$CONFIG_VALUE" ]; then
+        echo "Error: Please specify <account_id>, <config_key>, and <config_value>."
+        exit 1
+    fi
+
+    ACCOUNT_DATA=$(echo "$CONFIG_DATA" | jq -M ".${ACCOUNT}")
+    if [ "$ACCOUNT_DATA" = "null" ]; then
+        echo "The account \"$ACCOUNT\" doesn't exist!"
+        exit 1
+    fi
+
+    if [[ "$CONFIG_KEY" == *"."* ]]; then
+        CONFIG_KEY="\"${CONFIG_KEY}\""
+    fi
+
+    UPDATED_DATA=$(jq ".${ACCOUNT}.config.${CONFIG_KEY} = \"$CONFIG_VALUE\"" <<< "$CONFIG_DATA")
+    echo "$UPDATED_DATA" > "$CONFIG_FILEPATH"
+    echo "Updated custom config $CONFIG_KEY for account $ACCOUNT."
+}
+
+# Apply account configs to Git
+apply_account() {
+    ACCOUNT=$1
+    if [ -z "$ACCOUNT" ]; then
+        echo "Error: Please specify an account ID."
+        exit 1
+    fi
+
+    ACCOUNT_DATA=$(echo "$CONFIG_DATA" | jq -M ".${ACCOUNT}")
+    if [ "$ACCOUNT_DATA" = "null" ]; then
+        echo "The account \"$ACCOUNT\" doesn't exist!"
+        exit 1
+    fi
+
+    NAME=$(echo "$ACCOUNT_DATA" | jq -r ".name")
+    EMAIL=$(echo "$ACCOUNT_DATA" | jq -r ".email")
+    SIGNINGKEY=$(echo "$ACCOUNT_DATA" | jq -r ".signingkey")
+    GPG_FORMAT=$(echo "$ACCOUNT_DATA" | jq -r '."gpg.format"')
+    CONFIGS=$(echo "$ACCOUNT_DATA" | jq -r '.config')
+
+    echo git config user.name "$NAME"
+    echo git config user.email "$EMAIL"
+
+    if [ "$SIGNINGKEY" != "null" ] && [ "$GPG_FORMAT" != "null" ]; then
+        echo git config user.signingkey "$SIGNINGKEY"
+        echo git config gpg.format "$GPG_FORMAT"
+        echo git config commit.gpgsign true
+    fi
+
+    if [ "$CONFIGS" != "null" ]; then
+        echo "$CONFIGS" | jq -c 'to_entries[]' | while read -r pair; do
+            key=$(echo "$pair" | jq -r '.key')
+            value=$(echo "$pair" | jq -r '.value')
+            echo git config "$key" "$value"
+        done
+    fi
+
+    echo "Git configuration updated for account: $ACCOUNT."
+}
+
+# List all registered accounts
+list_accounts() {
+    ACCOUNT_IDS=$(echo "$CONFIG_DATA" | jq -r 'keys[]')
+    if [ -z "$ACCOUNT_IDS" ]; then
+        echo "No accounts are registered."
+        exit 0
+    fi
+
+    echo "$ACCOUNT_IDS"
+}
+
+# Add a remote URL with account credentials
+add_remote() {
+    ACCOUNT=$1
+    URL=$2
+
+    if [ -z "$ACCOUNT" ] || [ -z "$URL" ]; then
+        echo "Error: Please specify <account_id> and <URL>."
+        exit 1
+    fi
+
+    ACCOUNT_DATA=$(echo "$CONFIG_DATA" | jq -M ".${ACCOUNT}")
+    if [ "$ACCOUNT_DATA" = "null" ]; then
+        echo "The account \"$ACCOUNT\" doesn't exist!"
+        exit 1
+    fi
+
+    USERNAME=$(echo "$ACCOUNT_DATA" | jq -r ".username")
+    PASSWORD=$(echo "$ACCOUNT_DATA" | jq -r ".password")
+
+    if [ "$USERNAME" = "null" ] || [ "$PASSWORD" = "null" ]; then
+        echo "Error: The account \"$ACCOUNT\" must have both username and password defined."
+        exit 1
+    fi
+
+    # Embed credentials into the URL
+    CRED_URL=$(echo "$URL" | sed "s#://#://${USERNAME}:${PASSWORD}@#")
+
+    # Add to git remote
+    echo git remote set-url origin "$CRED_URL"
+    echo "Remote origin updated with credentials for account: $ACCOUNT."
+}
+
+# Command dispatcher
+case "$1" in
+    init)
+        echo "The credentials.json file is ready."
+        ;;
+    register)
+        register_account "$2"
+        ;;
+    get)
+        get_account "$2"
+        ;;
+    set-name)
+        set_name "$2" "$3"
+        ;;
+    set-email)
+        set_email "$2" "$3"
+        ;;
+    set-username)
+        set_username "$2" "$3"
+        ;;
+    set-password)
+        set_password "$2" "$3"
+        ;;
+    set-signingkey)
+        set_signingkey "$2" "$3"
+        ;;
+    set-gpg-format)
+        set_gpg_format "$2" "$3"
+        ;;
+    set-config)
+        set_config "$2" "$3" "$4"
+        ;;
+    list)
+        list_accounts
+        ;;
+    apply)
+        apply_account "$2"
+        ;;
+    add-remote)
+        add_remote "$2" "$3"
+        ;;
+    help|--help|-h)
+        show_help
+        ;;
+    *)
+        echo "Error: Unknown command '$1'"
+        echo "Use 'gam help' for a list of available commands."
+        exit 1
+        ;;
+esac
