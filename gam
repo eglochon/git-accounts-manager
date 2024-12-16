@@ -16,11 +16,15 @@ for addr in $CONFIG_DIRS; do
 done
 
 if [ -z "$CONFIG_FILEPATH" ]; then
-    echo "The $CONFIG_FILE file was not found!"
-    exit 1
-elif [ "$1" = "init" ]; then
-    mkdir -p "$(dirname "$CONFIG_FILEPATH")" && touch "$CONFIG_FILEPATH"
-    echo -n "{}" > "$CONFIG_FILEPATH"
+    if [ "$1" = "init" ]; then
+        mkdir -p "$(dirname "$CONFIG_FILEPATH")" && touch "$CONFIG_FILEPATH"
+        echo -n "{}" > "$CONFIG_FILEPATH"
+        echo "The $CONFIG_FILE file was created in [$(dirname "$CONFIG_FILEPATH")]."
+        exit 0
+    else
+        echo "The $CONFIG_FILE file was not found!"
+        exit 1
+    fi
 fi
 
 # Load configuration data
