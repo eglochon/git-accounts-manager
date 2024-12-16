@@ -2,6 +2,7 @@ Usage: gam <command> [arguments]
 
 Commands:
   init                                 Creates the credentials.json file in the config path.
+
   register <account>                   Register a new account with the specified ID.
                                        Prompts for name, email, username, password, and other settings.
 

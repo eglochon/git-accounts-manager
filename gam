@@ -36,6 +36,7 @@ show_help() {
     echo ""
     echo "Commands:"
     echo "  init                                 Creates the credentials.json file in the config path."
+    echo ""
     echo "  register <account>                   Register a new account with the specified ID."
     echo "                                       Prompts for name, email, username, password, and other settings."
     echo ""
